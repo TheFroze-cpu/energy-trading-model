@@ -1,44 +1,60 @@
 import sqlite3
 import pandas as pd
+from features import build_features 
 
 DB_PATH = "energy_market.db"
 
 def build_master():
     conn = sqlite3.connect(DB_PATH)
     
-    # 1. Daten laden (Fehler abfangen, falls eine Tabelle fehlt)
+    print("Berechne mathematische Preis-Features...")
+    build_features() 
+    
     try:
         prices = pd.read_sql("SELECT * FROM day_ahead_prices", conn)
         load_raw = pd.read_sql("SELECT * FROM grid_load", conn)
+        weather = pd.read_sql("SELECT * FROM weather_data", conn)
+        calc_features = pd.read_sql("SELECT * FROM features", conn)
     except Exception as e:
-        print("Fehler: 'day_ahead_prices' oder 'grid_load' fehlt in der Datenbank.")
+        print(f"Fehler beim Laden der historischen Tabellen: {e}")
+        conn.close()
         return pd.DataFrame()
 
-    # 2. Last-Daten für das ML-Modell wieder auf Gesamt-DE aggregieren
-    load = load_raw.groupby("Datum")["Verbrauch_MWh"].sum().reset_index()
+    # Wir aggregieren die Residuallast-Spalte aus deiner fetch_load.py
+    load = load_raw.groupby("Datum")["Residuallast_MWh"].sum().reset_index()
     
-    # 3. Datums-Formatierung
-    for df in [prices, load]:
+    for df in [prices, load, weather, calc_features]:
         df["Datum"] = pd.to_datetime(df["Datum"]).dt.round('h')
 
-    # 4. Mergen
-    master = prices.merge(load, on="Datum", how="inner")
-    
-    # Optional: Features mergen, falls vorhanden
-    try:
-        features = pd.read_sql("SELECT * FROM features", conn)
-        features["Datum"] = pd.to_datetime(features["Datum"]).dt.round('h')
-        overlap = (set(prices.columns) & set(features.columns)) - {"Datum"}
-        features = features.drop(columns=overlap, errors='ignore')
-        master = master.merge(features, on="Datum", how="inner")
-    except:
-        print("Info: Keine Feature-Tabelle gefunden. Fahre ohne fort.")
+    calc_features = calc_features[["Datum", "price_change", "rolling_avg_3h"]]
 
+    master = prices.merge(load, on="Datum", how="inner")
+    master = master.merge(weather, on="Datum", how="inner")
+    master = master.merge(calc_features, on="Datum", how="inner")
+    
     master.to_sql("master_dataset", conn, if_exists="replace", index=False)
+    print(f"Master-Datensatz (Historie) mit Residuallast erstellt: {len(master)} Zeilen.")
+
+    # --- ZUKUNFTS-FEATURES ZUSAMMENFÜHREN ---
+    try:
+        future_load = pd.read_sql("SELECT * FROM future_load", conn)
+        future_weather = pd.read_sql("SELECT * FROM future_weather", conn)
+        
+        future_load["Datum"] = pd.to_datetime(future_load["Datum"]).dt.round('h')
+        future_weather["Datum"] = pd.to_datetime(future_weather["Datum"]).dt.round('h')
+        
+        future_features = pd.merge(future_load, future_weather, on="Datum", how="inner")
+        
+        now = pd.Timestamp.utcnow().tz_localize(None)
+        future_features = future_features[future_features["Datum"] > now].head(24)
+        
+        future_features.to_sql("future_features", conn, if_exists="replace", index=False)
+        print(f"Zukunfts-Features (Residuallast) für {len(future_features)} Stunden gespeichert.")
+    except Exception as e:
+        print(f"Konnte Zukunfts-Features nicht zusammenführen: {e}")
+
     conn.close()
     return master
 
 if __name__ == "__main__":
-    df = build_master()
-    if not df.empty:
-        print(f"Master-Datensatz erfolgreich erstellt: {len(df)} Zeilen.")
+    build_master()

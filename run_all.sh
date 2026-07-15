@@ -6,22 +6,28 @@ NC='\033[0m' # No Color
 
 echo -e "${GREEN}--- Starte Daten-Pipeline ---${NC}"
 
-# 1. Daten holen
-echo "Lade neue Netzlast-Daten..."
+# Step 1: Alle Datenquellen abrufen & vorbereiten
+echo "Lade Day-Ahead-Preise von der Börse..."
+python3 fetch_prices.py
+
+echo "Lade neue Netzlast-Daten von SMARD..."
 python3 fetch_load.py
 
-# 2. Master-Datensatz bauen
+echo "Lade historische und prognostizierte Wetterdaten..."
+python3 fetch_weather.py
+
+echo "Erstelle geografische Zonen-Grenzdaten (GeoJSON)..."
+python3 generate_zones.py
+
+# Step 2: Daten transformieren und mergen
 echo "Baue Master-Datensatz..."
 python3 build_master.py
 
-# 3. Modell trainieren
-echo "Trainiere Modell..."
+# Step 3: Modell trainieren und Prognose berechnen
+echo "Trainiere Modell und berechne 24h-Preispfad..."
 python3 train_model.py
 
 echo -e "${GREEN}--- Pipeline abgeschlossen. Dashboard startet jetzt! ---${NC}"
 
-echo "Erstelle GeoJSON-Datei..."
-python3 generate_zones.py
-
-# 4. Dashboard starten
+# Step 4: Dashboard starten
 streamlit run dashboard.py
