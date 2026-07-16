@@ -20,12 +20,11 @@ def train_model():
 
     df["Datum"] = pd.to_datetime(df["Datum"])
     df = df.sort_values("Datum")
-    
     df["Target_Price"] = df["Preis_EUR"].shift(-1)
     df = df.dropna()
 
-    # Features basieren jetzt sauber auf der Residuallast
-    features = ["Preis_EUR", "Residuallast_MWh", "Temperatur_C", "Wind_kmh", "price_change", "rolling_avg_3h"]
+    # Die Residuallast ist nun physikalisch korrekt berechnet!
+    features = ["Preis_EUR", "Residuallast_MWh", "Temperatur_C", "Wind_kmh", "price_change", "rolling_avg_3h", "Stunde"]
     X = df[features]
     y = df["Target_Price"]
 
@@ -36,16 +35,14 @@ def train_model():
 
     preds = model.predict(X_test)
     mae = mean_absolute_error(y_test, preds)
-    print(f"Modell auf Residuallast trainiert! MAE: {mae:.2f} EUR")
+    print(f"Modell auf exakte Residuallast trainiert! MAE: {mae:.2f} EUR")
 
-    # Backtest-Ergebnisse speichern
     results = X_test.copy()
     results["Datum"] = df.loc[X_test.index, "Datum"]
     results["Target_Price"] = y_test
     results["Vorhersage"] = preds
     results.to_sql("forecast_results", conn, if_exists="replace", index=False)
 
-    # --- ZUKUNFTS-PROGNOSE ---
     try:
         future_features = pd.read_sql("SELECT * FROM future_features", conn)
         future_features["Datum"] = pd.to_datetime(future_features["Datum"])
@@ -55,18 +52,18 @@ def train_model():
         future_prices = []
         
         for _, row in future_features.iterrows():
-            residual_val = row["Residual_Forecast_MWh"]  # Passt exakt zum Output deiner fetch_load.py
+            residual_val = row["Residual_Forecast_MWh"] 
             temp_val = row["Temperatur_C_Forecast"]
             wind_val = row["Wind_kmh_Forecast"]
+            hour_val = row["Stunde"]
             
             current_price = price_history[-1]
-            
             price_change_val = abs(current_price - price_history[-2])
             rolling_avg_val = np.mean(price_history[-3:])
             
             X_future = pd.DataFrame(
-                [[current_price, residual_val, temp_val, wind_val, price_change_val, rolling_avg_val]], 
-                columns=["Preis_EUR", "Residuallast_MWh", "Temperatur_C", "Wind_kmh", "price_change", "rolling_avg_3h"]
+                [[current_price, residual_val, temp_val, wind_val, price_change_val, rolling_avg_val, hour_val]], 
+                columns=["Preis_EUR", "Residuallast_MWh", "Temperatur_C", "Wind_kmh", "price_change", "rolling_avg_3h", "Stunde"]
             )
             pred_price = model.predict(X_future)[0]
             
@@ -75,7 +72,7 @@ def train_model():
             
         future_features["Price_Forecast_EUR"] = future_prices
         future_features.to_sql("future_price_forecast", conn, if_exists="replace", index=False)
-        print("Zukunftsprognose auf Residuallast-Basis erfolgreich berechnet!")
+        print("Zukunftsprognose erfolgreich berechnet!")
     except Exception as e:
         print(f"Konnte Zukunftsprognose nicht erstellen: {e}")
 

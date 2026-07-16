@@ -6,7 +6,6 @@ DB_PATH = "energy_market.db"
 
 def build_master():
     conn = sqlite3.connect(DB_PATH)
-    
     print("Berechne mathematische Preis-Features...")
     build_features() 
     
@@ -20,8 +19,8 @@ def build_master():
         conn.close()
         return pd.DataFrame()
 
-    # Wir aggregieren die Residuallast-Spalte aus deiner fetch_load.py
-    load = load_raw.groupby("Datum")["Residuallast_MWh"].sum().reset_index()
+    # Wir aggregieren alle neuen Fundamentaldaten
+    load = load_raw.groupby("Datum")[["Netzlast_MWh", "Residuallast_MWh", "Erneuerbare_MWh"]].sum().reset_index()
     
     for df in [prices, load, weather, calc_features]:
         df["Datum"] = pd.to_datetime(df["Datum"]).dt.round('h')
@@ -32,10 +31,11 @@ def build_master():
     master = master.merge(weather, on="Datum", how="inner")
     master = master.merge(calc_features, on="Datum", how="inner")
     
+    master["Stunde"] = pd.to_datetime(master["Datum"]).dt.hour
+    
     master.to_sql("master_dataset", conn, if_exists="replace", index=False)
-    print(f"Master-Datensatz (Historie) mit Residuallast erstellt: {len(master)} Zeilen.")
+    print(f"Master-Datensatz erstellt: {len(master)} Zeilen.")
 
-    # --- ZUKUNFTS-FEATURES ZUSAMMENFÜHREN ---
     try:
         future_load = pd.read_sql("SELECT * FROM future_load", conn)
         future_weather = pd.read_sql("SELECT * FROM future_weather", conn)
@@ -45,11 +45,12 @@ def build_master():
         
         future_features = pd.merge(future_load, future_weather, on="Datum", how="inner")
         
-        now = pd.Timestamp.utcnow().tz_localize(None)
+        now = pd.Timestamp.now('UTC').tz_localize(None)
         future_features = future_features[future_features["Datum"] > now].head(24)
+        future_features["Stunde"] = pd.to_datetime(future_features["Datum"]).dt.hour
         
         future_features.to_sql("future_features", conn, if_exists="replace", index=False)
-        print(f"Zukunfts-Features (Residuallast) für {len(future_features)} Stunden gespeichert.")
+        print(f"Zukunfts-Features für {len(future_features)} Stunden gespeichert.")
     except Exception as e:
         print(f"Konnte Zukunfts-Features nicht zusammenführen: {e}")
 
